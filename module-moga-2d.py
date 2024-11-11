@@ -64,6 +64,7 @@ class LayerNorm2d(nn.Module):
 
 
 class ElementScale(nn.Module):
+    
     """A learnable element-wise scaler."""
 
     def __init__(self, embed_dims, init_value=0., requires_grad=True):
