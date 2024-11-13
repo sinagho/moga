@@ -284,12 +284,12 @@ class MultiOrderGatedAggregation3D(nn.Module):
 
     def feat_decompose(self, x):
         x = self.proj_1(x)
-        print(x.shape)
+        # print(x.shape)
         # x_d: [B, C, H, W, D] -> [B, C, 1, 1, 1]
         x_d = F.adaptive_avg_pool3d(x, output_size=1)
-        print(x_d.shape)
+        # print(x_d.shape)
         x = x + self.sigma(x - x_d)
-        print(x.shape)
+        # print(x.shape)
         x = self.act_value(x)
         return x
 
