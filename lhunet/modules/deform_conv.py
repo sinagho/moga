@@ -66,6 +66,14 @@ class DeformConvFunction(Function):
     @once_differentiable
     def backward(ctx, grad_output):
         input, offset, weight, bias = ctx.saved_tensors
+
+        # Cast to float32 [for AMP compatibility (_half to _float)]
+        grad_output = grad_output.to(torch.float32)
+        input = input.to(torch.float32)
+        offset = offset.to(torch.float32)
+        weight = weight.to(torch.float32)
+        bias = bias.to(torch.float32)
+
         grad_input, grad_offset, grad_weight, grad_bias = D3D.deform_conv_backward(
             input,
             weight,
