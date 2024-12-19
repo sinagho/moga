@@ -1,15 +1,18 @@
-from typing import Optional, Sequence, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union, Any
 
 import numpy as np
 import torch
 import torch.nn as nn
 
-from monai.networks.blocks.convolutions import Convolution
-from monai.networks.layers.factories import Act, Norm
 from monai.networks.layers.utils import get_act_layer, get_norm_layer
 
+from .base import BaseBlock, get_conv_layer, get_padding
 
-class UnetResBlock(nn.Module):
+
+__all__ = ["get_cnn_block"]
+
+
+class UnetResBlock(BaseBlock):
     """
     A skip-connection based module that can be used for DynUNet, based on:
     `Automated Design of Deep Learning Methods for Biomedical Image Segmentation <https://arxiv.org/abs/1904.08128>`_.
@@ -85,6 +88,8 @@ class UnetResBlock(nn.Module):
                 name=norm_name, spatial_dims=spatial_dims, channels=out_channels
             )
 
+        self.apply(self._init_weights)
+
     def forward(self, inp):
         residual = inp
         out = self.conv1(inp)
@@ -101,7 +106,7 @@ class UnetResBlock(nn.Module):
         return out
 
 
-class UnetBasicBlock(nn.Module):
+class UnetBasicBlock(BaseBlock):
     """
     A CNN module module that can be used for DynUNet, based on:
     `Automated Design of Deep Learning Methods for Biomedical Image Segmentation <https://arxiv.org/abs/1904.08128>`_.
@@ -160,6 +165,8 @@ class UnetBasicBlock(nn.Module):
             name=norm_name, spatial_dims=spatial_dims, channels=out_channels
         )
 
+        self.apply(self._init_weights)
+
     def forward(self, inp):
         out = self.conv1(inp)
         out = self.norm1(out)
@@ -170,7 +177,7 @@ class UnetBasicBlock(nn.Module):
         return out
 
 
-class UnetUpBlock(nn.Module):
+class UnetUpBlock(BaseBlock):
     """
     An upsampling module that can be used for DynUNet, based on:
     `Automated Design of Deep Learning Methods for Biomedical Image Segmentation <https://arxiv.org/abs/1904.08128>`_.
@@ -187,7 +194,6 @@ class UnetUpBlock(nn.Module):
         act_name: activation layer type and arguments.
         dropout: dropout probability.
         trans_bias: transposed convolution bias.
-
     """
 
     def __init__(
@@ -230,6 +236,8 @@ class UnetUpBlock(nn.Module):
             act_name=act_name,
         )
 
+        self.apply(self._init_weights)
+
     def forward(self, inp, skip):
         # number of channels for skip should equals to out_channels
         out = self.transp_conv(inp)
@@ -238,13 +246,14 @@ class UnetUpBlock(nn.Module):
         return out
 
 
-class UnetOutBlock(nn.Module):
+class UnetOutBlock(BaseBlock):
     def __init__(
         self,
         spatial_dims: int,
         in_channels: int,
         out_channels: int,
         dropout: Optional[Union[Tuple, str, float]] = None,
+        **kwargs,
     ):
         super().__init__()
         self.conv = get_conv_layer(
@@ -258,73 +267,22 @@ class UnetOutBlock(nn.Module):
             conv_only=True,
         )
 
+        self.apply(self._init_weights)
+
     def forward(self, inp):
         return self.conv(inp)
 
 
-def get_conv_layer(
-    spatial_dims: int,
-    in_channels: int,
-    out_channels: int,
-    kernel_size: Union[Sequence[int], int] = 3,
-    stride: Union[Sequence[int], int] = 1,
-    act: Optional[Union[Tuple, str]] = Act.PRELU,
-    norm: Union[Tuple, str] = Norm.INSTANCE,
-    dropout: Optional[Union[Tuple, str, float]] = None,
-    bias: bool = False,
-    conv_only: bool = True,
-    is_transposed: bool = False,
-):
-    padding = get_padding(kernel_size, stride)
-    output_padding = None
-    if is_transposed:
-        output_padding = get_output_padding(kernel_size, stride, padding)
-    return Convolution(
-        spatial_dims,
-        in_channels,
-        out_channels,
-        strides=stride,
-        kernel_size=kernel_size,
-        act=act,
-        norm=norm,
-        dropout=dropout,
-        bias=bias,
-        conv_only=conv_only,
-        is_transposed=is_transposed,
-        padding=padding,
-        output_padding=output_padding,
-    )
+# =================================================
 
 
-def get_padding(
-    kernel_size: Union[Sequence[int], int], stride: Union[Sequence[int], int]
-) -> Union[Tuple[int, ...], int]:
-    kernel_size_np = np.atleast_1d(kernel_size)
-    stride_np = np.atleast_1d(stride)
-    padding_np = (kernel_size_np - stride_np + 1) / 2
-    if np.min(padding_np) < 0:
-        raise AssertionError(
-            "padding value should not be negative, please change the kernel size and/or stride."
-        )
-    padding = tuple(int(p) for p in padding_np)
+def get_cnn_block(code):
+    if code.lower() == "r":
+        return UnetResBlock
+    elif code.lower() == "b":
+        return UnetBasicBlock
+    elif code.lower() == "o":
+        return UnetOutBlock
+    else:
+        raise NotImplementedError(f"Not implemented cnn-block for code:<{code}>")
 
-    return padding if len(padding) > 1 else padding[0]
-
-
-def get_output_padding(
-    kernel_size: Union[Sequence[int], int],
-    stride: Union[Sequence[int], int],
-    padding: Union[Sequence[int], int],
-) -> Union[Tuple[int, ...], int]:
-    kernel_size_np = np.atleast_1d(kernel_size)
-    stride_np = np.atleast_1d(stride)
-    padding_np = np.atleast_1d(padding)
-
-    out_padding_np = 2 * padding_np + stride_np - kernel_size_np
-    if np.min(out_padding_np) < 0:
-        raise AssertionError(
-            "out_padding value should not be negative, please change the kernel size and/or stride."
-        )
-    out_padding = tuple(int(p) for p in out_padding_np)
-
-    return out_padding if len(out_padding) > 1 else out_padding[0]
