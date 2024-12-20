@@ -33,7 +33,7 @@ class Decoder(BaseBlock):
         in_out_channles = [
             (i, o) for i, o in zip(in_out_channles[:-1], in_out_channles[1:])
         ]
-
+        self.skip_mode = skip_mode
         self.ups = nn.ModuleList()
         self.blocks = nn.ModuleList()
         for (ich, och), upst in zip(
@@ -63,9 +63,7 @@ class Decoder(BaseBlock):
         for up, block in zip(self.ups, self.blocks):
             x_up = up(x)
             skip = skips.pop()
-
-            x = torch.cat([x_up, skip], dim=1)
-
+            x = torch.cat([x_up, skip], dim=1) if self.skip_mode == "cat" else x_up+skip
             x = block(x)
             if return_outs:
                 outs.append(x.clone())
