@@ -28,6 +28,7 @@ class Decoder(BaseBlock):
         up_strides = [s if isinstance(s, list) else spatial_dims*[s] for s in up_strides]
 
         conv_block = nn.Conv2d if spatial_dims == 2 else nn.Conv3d
+        norm_block = nn.BatchNorm2d if spatial_dims == 2 else nn.BatchNorm3d
 
         in_out_channles = [in_channels] + features
         in_out_channles = [
@@ -51,6 +52,8 @@ class Decoder(BaseBlock):
             if skip_mode == "cat":
                 self.blocks.append(nn.Sequential(
                     conv_block(och*2, och, kernel_size=1, stride=1, bias=True),
+                    norm_block(och),
+                    nn.PReLU(),
                     block(och)
                 ))
             else:
