@@ -17,6 +17,7 @@ class Decoder(BaseBlock):
         block: nn.Module = nn.Identity,
         spatial_dims=2,
         up_transpose=True,
+        skip_mode="cat",
         **kwargs,
     ) -> Any:
         super().__init__()
@@ -47,14 +48,24 @@ class Decoder(BaseBlock):
                 )
             )
 
-            self.blocks.append(block(och))
+            if skip_mode == "cat":
+                self.blocks.append(nn.Sequential(
+                    conv_block(och*2, och, kernel_size=1, stride=1, bias=True),
+                    block(och)
+                ))
+            else:
+                self.blocks.append(block(och))
 
         self.apply(self._init_weights)
 
     def forward(self, x, skips: list, return_outs=False):
         outs = []
         for up, block in zip(self.ups, self.blocks):
-            x = up(x) + skips.pop()
+            x_up = up(x)
+            skip = skips.pop()
+
+            x = torch.cat([x_up, skip], dim=1)
+
             x = block(x)
             if return_outs:
                 outs.append(x.clone())
