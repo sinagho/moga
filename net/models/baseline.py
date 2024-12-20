@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+from ..blocks.cnn import UnetOutBlock
 from ..modules.encoder import Encoder
 from ..modules.decoder import Decoder
 from ..modules.moga import MogaBlock
@@ -14,9 +15,10 @@ class Net(nn.Module):
         kernel_size=[3, 3, 3], 
         stride=[2, 2, 2],
         maxpools = [True, False, False],
-        dropouts = [0.1, 0.1, 0.1],
+        dropouts = [0.05, 0.05, 0.05],
+        skip_mode="cat",
         norm_name="batch",
-        act_name=("leakyrelu", {"inplace": True, "negative_slope": 0.01}),
+        act_name=("gelu", {"inplace": True}), #("leakyrelu", {"inplace": True, "negative_slope": 0.01}),
         block = MogaBlock, #nn.Identity,
         up_transpose=False,
     ):
@@ -28,7 +30,7 @@ class Net(nn.Module):
         self.init = nn.Sequential(
             nn.Conv2d(in_channels, head_ch, 3, 1, 1),
             nn.BatchNorm2d(head_ch),
-            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+            nn.GELU(),
         )
         
         self.encoder = Encoder(
@@ -50,16 +52,21 @@ class Net(nn.Module):
             block=block,
             up_transpose=up_transpose,
             spatial_dims=2,
+            skip_mode=skip_mode,
         )
 
-        self.out = nn.Sequential(
-            nn.Conv2d(head_ch, out_channels, 1, 1),
-            nn.Sigmoid(),
+        self.out = UnetOutBlock(
+            spatial_dims=2,
+            in_channels=2*head_ch,
+            out_channels=out_channels,
+            dropout=0,
+            norm_name=norm_name,
+            act_name=act_name,
         )
 
     def forward(self, x):
         x_head = self.init(x)
         x, skips = self.encoder(x_head)
         x = self.decoder(x, skips)
-        x = self.out(x+x_head)
+        x = self.out(torch.cat((x, x_head), dim=1))
         return x
