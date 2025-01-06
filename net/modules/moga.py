@@ -233,7 +233,7 @@ class MultiOrderDWConv(nn.Module):
                 ):
         super(MultiOrderDWConv, self).__init__()
         
-        channel_split=[2, 2, 2, 2]
+        channel_split=[5, 5, 5, 1]
 
         self.useAllChannels = flag_useAllChannels
         if flag_useAllChannels:
