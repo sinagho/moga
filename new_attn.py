@@ -64,9 +64,7 @@ class LayerNorm2d(nn.Module):
 
 
 class ElementScale(nn.Module):
-    
     """A learnable element-wise scaler."""
-
     def __init__(self, embed_dims, init_value=0., requires_grad=True):
         super(ElementScale, self).__init__()
         self.scale = nn.Parameter(
@@ -91,7 +89,6 @@ class ChannelAggregationFFN(nn.Module):
         ffn_drop (float, optional): Probability of an element to be
             zeroed in FFN. Default 0.0.
     """
-
     def __init__(self,
                  embed_dims,
                  feedforward_channels,
@@ -229,11 +226,14 @@ class MultiOrderDWConv(nn.Module):
 
     def __init__(self,
                  embed_dims,
+                 dw_dilation=[1, 2, 3],
                  channel_split=[1, 3, 4, 2],
                  rates=[6, 12, 18],
-                 flag_useAllChannels = False,
+                 flag_useAllChannels=False,
                 ):
         super(MultiOrderDWConv, self).__init__()
+        
+        channel_split=[2, 2, 2, 2]
 
         self.useAllChannels = flag_useAllChannels
         if flag_useAllChannels:
@@ -245,16 +245,18 @@ class MultiOrderDWConv(nn.Module):
                 nci = int(cr * embed_dims)
                 assert nci > 0, "Ops. Channel split ratio is not correct"
                 channel_indices.append((channel_indices[-1][1], channel_indices[-1][1] + nci))
-        self.channel_split = channel_split
+        self.channel_indices = channel_indices
         
         assert len(rates)+1 == len(channel_split) == 4
-        
-        self.dlps = nn,ModuleList()
+
+        self.dlps = nn.ModuleList()
         for rate, cids in zip(rates, channel_indices):
+            kernel_size_effective = 3 + (3 - 1) * (rate - 1)
+            padding = (kernel_size_effective - 1) // 2
             self.dlps.append(
                 SepConvBN(
-                    in_channels=cids[1] - cids[0],
-                    filters=cids[1] - cids[0],
+                    in_channels=cids[1]-cids[0],
+                    filters=cids[1]-cids[0],
                     kernel_size=3,
                     stride=1,
                     rate=rate,
@@ -267,12 +269,13 @@ class MultiOrderDWConv(nn.Module):
         # image pooling
         self.dlps.append(nn.Sequential(
             nn.AdaptiveAvgPool2d((7, 7)),
-            nn.Conv2d(idp, idp, kernel_size=1, stride=1, padding=0, bias=False),
-            nn.BatchNorm2d(256, eps=1e-5),
+            nn.Conv2d(ipd, ipd, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(ipd, eps=1e-5),
             nn.ReLU(inplace=True),
-            BilinearUpsampling(scale_factor=7)
+            # nn.Upsample(scale_factor=14, mode='bilinear', align_corners=False),
+            nn.UpsamplingBilinear2d(scale_factor=7)
         ))
-        
+        self.embed_dims = embed_dims
         # a channel convolution
         self.PW_conv = nn.Conv2d(  # point-wise convolution
             in_channels=embed_dims,
@@ -281,9 +284,14 @@ class MultiOrderDWConv(nn.Module):
 
     def forward(self, x):
         dls_res = []
-        for dlp, csps in zip(self.dlps, self.channel_split):
+        # print(self.embed_dims)
+        for dlp, csps in zip(self.dlps, self.channel_indices):
+            # print(dlp, "/n", csps)
             y = dlp(x[:, csps[0]:csps[1], ...])
+            if y.shape[2] != x.shape[2] or y.shape[3] != x.shape[3]:
+                y = F.interpolate(y, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
             dls_res.append(y)
+            # print(y.shape)
         
         if self.useAllChannels:
             x = torch.sum(dls_res)

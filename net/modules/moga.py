@@ -64,9 +64,7 @@ class LayerNorm2d(nn.Module):
 
 
 class ElementScale(nn.Module):
-    
     """A learnable element-wise scaler."""
-
     def __init__(self, embed_dims, init_value=0., requires_grad=True):
         super(ElementScale, self).__init__()
         self.scale = nn.Parameter(
@@ -91,7 +89,6 @@ class ChannelAggregationFFN(nn.Module):
         ffn_drop (float, optional): Probability of an element to be
             zeroed in FFN. Default 0.0.
     """
-
     def __init__(self,
                  embed_dims,
                  feedforward_channels,
@@ -148,6 +145,76 @@ class ChannelAggregationFFN(nn.Module):
         return x
 
 
+# class MultiOrderDWConv(nn.Module):
+#     """Multi-order Features with Dilated DWConv Kernel.
+
+#     Args:
+#         embed_dims (int): Number of input channels.
+#         dw_dilation (list): Dilations of three DWConv layers.
+#         channel_split (list): The raletive ratio of three splited channels.
+#     """
+
+#     def __init__(self,
+#                  embed_dims,
+#                  dw_dilation=[1, 2, 3,],
+#                  channel_split=[1, 3, 4,],
+#                 ):
+#         super(MultiOrderDWConv, self).__init__()
+
+#         self.split_ratio = [i / sum(channel_split) for i in channel_split]
+#         self.embed_dims_1 = int(self.split_ratio[1] * embed_dims)
+#         self.embed_dims_2 = int(self.split_ratio[2] * embed_dims)
+#         self.embed_dims_0 = embed_dims - self.embed_dims_1 - self.embed_dims_2
+#         self.embed_dims = embed_dims
+#         assert len(dw_dilation) == len(channel_split) == 3
+#         assert 1 <= min(dw_dilation) and max(dw_dilation) <= 3
+#         assert embed_dims % sum(channel_split) == 0
+
+#         # basic DW conv
+#         self.DW_conv0 = nn.Conv2d(
+#             in_channels=self.embed_dims,
+#             out_channels=self.embed_dims,
+#             kernel_size=5,
+#             padding=(1 + 4 * dw_dilation[0]) // 2,
+#             groups=self.embed_dims,
+#             stride=1, dilation=dw_dilation[0],
+#         )
+#         # DW conv 1
+#         self.DW_conv1 = nn.Conv2d(
+#             in_channels=self.embed_dims_1,
+#             out_channels=self.embed_dims_1,
+#             kernel_size=5,
+#             padding=(1 + 4 * dw_dilation[1]) // 2,
+#             groups=self.embed_dims_1,
+#             stride=1, dilation=dw_dilation[1],
+#         )
+#         # DW conv 2
+#         self.DW_conv2 = nn.Conv2d(
+#             in_channels=self.embed_dims_2,
+#             out_channels=self.embed_dims_2,
+#             kernel_size=7,
+#             padding=(1 + 6 * dw_dilation[2]) // 2,
+#             groups=self.embed_dims_2,
+#             stride=1, dilation=dw_dilation[2],
+#         )
+#         # a channel convolution
+#         self.PW_conv = nn.Conv2d(  # point-wise convolution
+#             in_channels=embed_dims,
+#             out_channels=embed_dims,
+#             kernel_size=1)
+
+#     def forward(self, x):
+#         x_0 = self.DW_conv0(x)
+#         x_1 = self.DW_conv1(
+#             x_0[:, self.embed_dims_0: self.embed_dims_0+self.embed_dims_1, ...])
+#         x_2 = self.DW_conv2(
+#             x_0[:, self.embed_dims-self.embed_dims_2:, ...])
+#         x = torch.cat([
+#             x_0[:, :self.embed_dims_0, ...], x_1, x_2], dim=1)
+#         x = self.PW_conv(x)
+#         return x
+
+from blocks import SepConvBN
 class MultiOrderDWConv(nn.Module):
     """Multi-order Features with Dilated DWConv Kernel.
 
@@ -159,47 +226,56 @@ class MultiOrderDWConv(nn.Module):
 
     def __init__(self,
                  embed_dims,
-                 dw_dilation=[1, 2, 3,],
-                 channel_split=[1, 3, 4,],
+                 dw_dilation=[1, 2, 3],
+                 channel_split=[1, 3, 4, 2],
+                 rates=[6, 12, 18],
+                 flag_useAllChannels=False,
                 ):
         super(MultiOrderDWConv, self).__init__()
+        
+        channel_split=[2, 2, 2, 2]
 
-        self.split_ratio = [i / sum(channel_split) for i in channel_split]
-        self.embed_dims_1 = int(self.split_ratio[1] * embed_dims)
-        self.embed_dims_2 = int(self.split_ratio[2] * embed_dims)
-        self.embed_dims_0 = embed_dims - self.embed_dims_1 - self.embed_dims_2
+        self.useAllChannels = flag_useAllChannels
+        if flag_useAllChannels:
+            channel_indices = [(0, embed_dims)] * len(channel_split)
+        else:
+            split_ratio = [i / sum(channel_split) for i in channel_split]
+            channel_indices = [(0, int(split_ratio[0] * embed_dims))]
+            for cr in split_ratio[1:]:
+                nci = int(cr * embed_dims)
+                assert nci > 0, "Ops. Channel split ratio is not correct"
+                channel_indices.append((channel_indices[-1][1], channel_indices[-1][1] + nci))
+        self.channel_indices = channel_indices
+        
+        assert len(rates)+1 == len(channel_split) == 4
+
+        self.dlps = nn.ModuleList()
+        for rate, cids in zip(rates, channel_indices):
+            kernel_size_effective = 3 + (3 - 1) * (rate - 1)
+            padding = (kernel_size_effective - 1) // 2
+            self.dlps.append(
+                SepConvBN(
+                    in_channels=cids[1]-cids[0],
+                    filters=cids[1]-cids[0],
+                    kernel_size=3,
+                    stride=1,
+                    rate=rate,
+                    depth_activation=True,
+                    epsilon=1e-5
+                )
+            )
+            
+        ipd = channel_indices[-1][1] - channel_indices[-1][0]
+        # image pooling
+        self.dlps.append(nn.Sequential(
+            nn.AdaptiveAvgPool2d((7, 7)),
+            nn.Conv2d(ipd, ipd, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(ipd, eps=1e-5),
+            nn.ReLU(inplace=True),
+            # nn.Upsample(scale_factor=14, mode='bilinear', align_corners=False),
+            nn.UpsamplingBilinear2d(scale_factor=7)
+        ))
         self.embed_dims = embed_dims
-        assert len(dw_dilation) == len(channel_split) == 3
-        assert 1 <= min(dw_dilation) and max(dw_dilation) <= 3
-        assert embed_dims % sum(channel_split) == 0
-
-        # basic DW conv
-        self.DW_conv0 = nn.Conv2d(
-            in_channels=self.embed_dims,
-            out_channels=self.embed_dims,
-            kernel_size=5,
-            padding=(1 + 4 * dw_dilation[0]) // 2,
-            groups=self.embed_dims,
-            stride=1, dilation=dw_dilation[0],
-        )
-        # DW conv 1
-        self.DW_conv1 = nn.Conv2d(
-            in_channels=self.embed_dims_1,
-            out_channels=self.embed_dims_1,
-            kernel_size=5,
-            padding=(1 + 4 * dw_dilation[1]) // 2,
-            groups=self.embed_dims_1,
-            stride=1, dilation=dw_dilation[1],
-        )
-        # DW conv 2
-        self.DW_conv2 = nn.Conv2d(
-            in_channels=self.embed_dims_2,
-            out_channels=self.embed_dims_2,
-            kernel_size=7,
-            padding=(1 + 6 * dw_dilation[2]) // 2,
-            groups=self.embed_dims_2,
-            stride=1, dilation=dw_dilation[2],
-        )
         # a channel convolution
         self.PW_conv = nn.Conv2d(  # point-wise convolution
             in_channels=embed_dims,
@@ -207,13 +283,20 @@ class MultiOrderDWConv(nn.Module):
             kernel_size=1)
 
     def forward(self, x):
-        x_0 = self.DW_conv0(x)
-        x_1 = self.DW_conv1(
-            x_0[:, self.embed_dims_0: self.embed_dims_0+self.embed_dims_1, ...])
-        x_2 = self.DW_conv2(
-            x_0[:, self.embed_dims-self.embed_dims_2:, ...])
-        x = torch.cat([
-            x_0[:, :self.embed_dims_0, ...], x_1, x_2], dim=1)
+        dls_res = []
+        # print(self.embed_dims)
+        for dlp, csps in zip(self.dlps, self.channel_indices):
+            # print(dlp, "/n", csps)
+            y = dlp(x[:, csps[0]:csps[1], ...])
+            if y.shape[2] != x.shape[2] or y.shape[3] != x.shape[3]:
+                y = F.interpolate(y, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
+            dls_res.append(y)
+        
+        if self.useAllChannels:
+            x = torch.sum(dls_res)
+        else:
+            x = torch.cat(dls_res, dim=1)
+
         x = self.PW_conv(x)
         return x
 
