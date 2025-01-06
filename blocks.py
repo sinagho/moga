@@ -8,11 +8,11 @@ class SepConvBN(nn.Module):
         super(SepConvBN, self).__init__()
 
         # Calculate padding
-        if stride == 1:
-            self.padding = kernel_size // 2
-        else:
-            kernel_size_effective = kernel_size + (kernel_size - 1) * (rate - 1)
-            self.padding = (kernel_size_effective - 1) // 2
+        # if stride == 1:
+        #     self.padding = kernel_size // 2
+        # else:
+        kernel_size_effective = kernel_size + (kernel_size - 1) * (rate - 1)
+        self.padding = (kernel_size_effective - 1) // 2
 
         self.depthwise = nn.Conv2d(
             in_channels,
@@ -35,7 +35,6 @@ class SepConvBN(nn.Module):
             bias=False
         )
         self.pointwise_bn = nn.BatchNorm2d(filters, eps=epsilon)
-
         self.depth_activation = depth_activation
 
     def forward(self, x):
